@@ -1,0 +1,16 @@
+[package]
+name = "openbazaar3"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+clap = { version = "4.1.11", features = ["derive"] }
+async-std = { version = "1.12", features = ["attributes"] }
+async-trait = "0.1.67"
+env_logger = "0.10"
+futures = "0.3.27"
+libp2p = { version ="0.51.1", features = ["tokio", "async-std", "dns", "kad",  "mplex", "noise", "tcp", "websocket", "yamux", "request-response", "macros"] }
+either = "1.8.1"
+libp2p-swarm-derive = "0.32.0"
+anyhow = "1.0.70"
+tokio = { version = "1.26.0", features = ["macros", "rt-multi-thread", "fs", "sync"] }
