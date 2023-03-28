@@ -1,5 +1,6 @@
 mod network;
 mod webserver;
+mod wallet;
 
 use clap::{Args, Parser, Subcommand};
 use actix_web::{web, HttpRequest, Responder, HttpResponse};
@@ -86,6 +87,7 @@ fn main() -> anyhow::Result<()> {
 
 
             // TODO: Start up bitcoin wallet
+            wallet::fire_up_wallet();
 
             println!("OpenBazaar started successfully! (Press Ctrl+C to exit)");
 

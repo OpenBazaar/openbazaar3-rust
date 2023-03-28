@@ -21,3 +21,10 @@ tracing = "0.1"
 tracing-subscriber = "0.3.1"
 actix = "0.13.0"
 axum = "0.6.12"
+unicode-normalization = "0.1.9"
+bdk = { git = "https://github.com/hoffmabc/bdk", version = "1.0.0-alpha.0", features = ["keys-bip39"]}
+
+bdk_electrum = { git = "https://github.com/hoffmabc/bdk", version="0.2.0"}
+bdk_file_store = {  git = "https://github.com/hoffmabc/bdk", version="0.1.0"}
+bdk_chain = { git = "https://github.com/hoffmabc/bdk", version="0.4"}
+bdk_esplora = { git = "https://github.com/hoffmabc/bdk", version="0.2.0"}
