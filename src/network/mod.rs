@@ -184,6 +184,7 @@ impl EventLoop {
 
     async fn handle_event(&mut self, event: SwarmEvent<ComposedEvent, std::io::Error>) {
         match event {
+            SwarmEvent::Behaviour(ComposedEvent::Kademlia(..)) => {}
             SwarmEvent::NewListenAddr { address, .. } => {
                 let local_peer_id = *self.swarm.local_peer_id();
                 println!(
@@ -192,6 +193,24 @@ impl EventLoop {
                 )
             }
             SwarmEvent::ConnectionClosed { .. } => {}
+            SwarmEvent::ConnectionEstablished {
+                peer_id, endpoint, ..
+            } => {
+                println!(
+                    "Adding peer {} with address {}",
+                    peer_id,
+                    endpoint.get_remote_address().clone()
+                );
+                self.swarm
+                    .behaviour_mut()
+                    .kademlia
+                    .add_address(&peer_id, endpoint.get_remote_address().clone());
+                if endpoint.is_dialer() {
+                    if let Some(sender) = self.pending_dial.remove(&peer_id) {
+                        let _ = sender.send(Ok(()));
+                    }
+                }
+            }
             SwarmEvent::Dialing(..) => {}
             SwarmEvent::IncomingConnection {
                 local_addr,
