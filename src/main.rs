@@ -1,14 +1,13 @@
 mod network;
-mod webserver;
 mod wallet;
+mod webserver;
 
 use std::str::FromStr;
 
+use actix_web::{web, HttpRequest, HttpResponse, Responder};
 use clap::{Args, Parser, Subcommand};
-use actix_web::{web, HttpRequest, Responder, HttpResponse};
-use libp2p::{Multiaddr, multiaddr::Protocol, PeerId};
+use libp2p::{multiaddr::Protocol, Multiaddr, PeerId};
 use tracing::Level;
-
 
 #[derive(Parser)]
 #[command(name = "openbazaar3")]
@@ -20,7 +19,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    #[command()] 
+    #[command()]
     Start {},
 }
 
@@ -31,12 +30,10 @@ enum Commands {
 // }
 
 fn main() -> anyhow::Result<()> {
-    
     let cli = Cli::parse();
-    
-    match cli.command {
-        Commands::Start { } => {
 
+    match cli.command {
+        Commands::Start {} => {
             let libp2p_port = 4002;
             let libp2p_ip4 = "0.0.0.0";
             let http_host = "0.0.0.0";
@@ -44,7 +41,7 @@ fn main() -> anyhow::Result<()> {
             // TODO: implement TLS
             // let https_port = 8081;
 
-            println!("Starting OpenBazaar..."); 
+            println!("Starting OpenBazaar...");
 
             // Set up tracing
             let collector = tracing_subscriber::fmt()
@@ -52,7 +49,7 @@ fn main() -> anyhow::Result<()> {
                 .finish();
             tracing::subscriber::set_global_default(collector)
                 .expect("There was a problem setting up tracing");
-            
+
             // Create tokio async runtime
             let rt = tokio::runtime::Runtime::new().unwrap();
 
@@ -64,41 +61,42 @@ fn main() -> anyhow::Result<()> {
             let keypair = network::generate_key();
 
             // Create a new libp2p network and wait for it to spin up
-            let (client, mut event_loop) = rt.block_on(async move {
-                network::new(keypair).await.unwrap()
-            });
+            let (client, mut event_loop) =
+                rt.block_on(async move { network::new(keypair).await.unwrap() });
 
             // Kick off the event loop handler in a thread
-            let event_loop_handler = rt.spawn(async move {
-                event_loop.run().await
-            });
-            
+            let event_loop_handler = rt.spawn(async move { event_loop.run().await });
+
             // Fire up the network listener for incoming connections
             let mut listener_client = client.clone();
             rt.block_on(async move {
-                let addr = format!("/ip4/{}/tcp/{}", libp2p_ip4, libp2p_port).parse().expect("Failed to parse multiaddr");
+                let addr = format!("/ip4/{}/tcp/{}", libp2p_ip4, libp2p_port)
+                    .parse()
+                    .expect("Failed to parse multiaddr");
                 listener_client.start_listening(addr).await.unwrap();
             });
 
             let mut client_dial = client.clone();
             if let Some(addr) = std::env::var_os("PEER") {
-                let addr = Multiaddr::from_str(&addr.to_string_lossy()).expect("Failed to parse multiaddr");
+                let addr = Multiaddr::from_str(&addr.to_string_lossy())
+                    .expect("Failed to parse multiaddr");
                 let peer_id = match addr.iter().last() {
-                    Some(Protocol::P2p(hash)) => PeerId::from_multihash(hash).expect("Failed to parse peer ID"),
-                    _ => panic!("No peer ID found in multiaddr")
+                    Some(Protocol::P2p(hash)) => {
+                        PeerId::from_multihash(hash).expect("Failed to parse peer ID")
+                    }
+                    _ => panic!("No peer ID found in multiaddr"),
                 };
                 rt.block_on(async move {
                     client_dial.dial(peer_id, addr).await.unwrap();
                 })
             }
             // TODO: Set up TLS connection
-            
-            // Fire up the web server for our API
-            rt.spawn(async move { 
-                let http_addr = format!("{}:{}", http_host, http_port);
-                webserver::start_webserver(http_addr).await 
-            });
 
+            // Fire up the web server for our API
+            rt.spawn(async move {
+                let http_addr = format!("{}:{}", http_host, http_port);
+                webserver::start_webserver(http_addr).await
+            });
 
             // TODO: Start up bitcoin wallet
             // wallet::fire_up_wallet();
@@ -114,16 +112,10 @@ fn main() -> anyhow::Result<()> {
                 tokio::signal::ctrl_c().await.unwrap();
                 signal_handler.abort();
             });
-
-            
-
         }
-
-        
-    }    
+    }
 
     Ok(())
-
 }
 
 pub struct OBData {
@@ -140,4 +132,3 @@ pub async fn handler(req: HttpRequest, counter: web::Data<OBData>) -> impl Respo
 
     HttpResponse::Ok().body(counter.count.get().to_string())
 }
-

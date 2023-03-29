@@ -1,15 +1,15 @@
-use std::collections::HashMap;
-use std::error::Error;
 use futures::StreamExt;
 use libp2p::identity::Keypair;
-use libp2p::{Multiaddr, PeerId};
 use libp2p::kad::KademliaEvent;
-use libp2p::swarm::{SwarmBuilder, NetworkBehaviour};
-use tokio::sync::{mpsc, oneshot};
-use libp2p::{swarm::SwarmEvent};
 use libp2p::multiaddr::Protocol;
+use libp2p::swarm::SwarmEvent;
+use libp2p::swarm::{NetworkBehaviour, SwarmBuilder};
+use libp2p::{Multiaddr, PeerId};
+use std::collections::HashMap;
+use std::error::Error;
+use tokio::sync::{mpsc, oneshot};
 
-use libp2p::kad::{Kademlia, record::store::MemoryStore};
+use libp2p::kad::{record::store::MemoryStore, Kademlia};
 use tracing::instrument;
 
 // TODO: connect to bootstrap nodes
@@ -18,7 +18,6 @@ use tracing::instrument;
 // ];
 
 pub async fn new(keypair: Keypair) -> Result<(Client, EventLoop), Box<dyn Error>> {
-    
     let peer_id = keypair.public().to_peer_id();
 
     // Create transport for determining how to send data on the network
@@ -29,14 +28,10 @@ pub async fn new(keypair: Keypair) -> Result<(Client, EventLoop), Box<dyn Error>
         kademlia: Kademlia::new(peer_id, MemoryStore::new(peer_id)),
         // TODO: add in OpenBazazar behaviour
     };
-    
+
     // Create libp2p swarm
-    let swarm = SwarmBuilder::with_tokio_executor(
-        transport, 
-        behaviour,
-        peer_id)
-            .build();
-        
+    let swarm = SwarmBuilder::with_tokio_executor(transport, behaviour, peer_id).build();
+
     // Create command channel with buffer of 1 to process messages in order
     let (command_sender, command_receiver) = mpsc::channel(1);
 
@@ -44,9 +39,8 @@ pub async fn new(keypair: Keypair) -> Result<(Client, EventLoop), Box<dyn Error>
         Client {
             sender: command_sender,
         },
-        EventLoop::new(swarm, command_receiver)
+        EventLoop::new(swarm, command_receiver),
     ))
-
 }
 
 pub fn generate_key() -> libp2p::identity::Keypair {
@@ -59,35 +53,29 @@ pub struct Client {
 }
 
 impl Client {
-
     #[instrument]
-    pub async fn start_listening(
-        &mut self, addr: Multiaddr,
-    ) -> anyhow::Result<()> {
+    pub async fn start_listening(&mut self, addr: Multiaddr) -> anyhow::Result<()> {
         let (sender, receiver) = oneshot::channel();
         self.sender
-            .send(Command::StartListening {addr, sender})
+            .send(Command::StartListening { addr, sender })
             .await
             .expect("Failed to send command");
         receiver.await.expect("Failed to send command")
     }
 
     #[instrument]
-    pub async fn dial(
-        &mut self,
-        peer_id: PeerId,
-        addr: Multiaddr,
-    ) -> anyhow::Result<()> {
+    pub async fn dial(&mut self, peer_id: PeerId, addr: Multiaddr) -> anyhow::Result<()> {
         let (sender, receiver) = oneshot::channel();
         self.sender
-            .send(Command::Dial {peer_id, addr, sender})
+            .send(Command::Dial {
+                peer_id,
+                addr,
+                sender,
+            })
             .await
             .expect("Failed to send command");
         receiver.await.expect("Failed to send command")
     }
-
-
-
 }
 
 #[derive(Debug)]
@@ -136,7 +124,10 @@ pub struct EventLoop {
 }
 
 impl EventLoop {
-    fn new(swarm: libp2p::Swarm<ComposedBehaviour>, command_receiver: mpsc::Receiver<Command>) -> Self {
+    fn new(
+        swarm: libp2p::Swarm<ComposedBehaviour>,
+        command_receiver: mpsc::Receiver<Command>,
+    ) -> Self {
         Self {
             swarm,
             command_receiver,
@@ -145,29 +136,35 @@ impl EventLoop {
     }
 
     pub async fn run(&mut self) {
-		loop {
-			tokio::select! {
-				event = self.swarm.next() => {
-					self.handle_event(event.unwrap()).await
-				},
-				command = self.command_receiver.recv() => match command {
-					Some(c) => self.handle_command(c).await,
-					None => return,
-				}
-			}
-		}
-	}
+        loop {
+            tokio::select! {
+                event = self.swarm.next() => {
+                    self.handle_event(event.unwrap()).await
+                },
+                command = self.command_receiver.recv() => match command {
+                    Some(c) => self.handle_command(c).await,
+                    None => return,
+                }
+            }
+        }
+    }
 
     async fn handle_command(&mut self, command: Command) {
         match command {
             Command::StartListening { addr, sender } => {
-				let _ = match self.swarm.listen_on(addr) {
-					Ok(_) => sender.send(Ok(())),
-					Err(e) => sender.send(Err(anyhow::Error::from(e))),
-				};
-			}
-            Command::Dial { peer_id, addr, sender } => {
-                if let std::collections::hash_map::Entry::Vacant(_) = self.pending_dial.entry(peer_id) {
+                let _ = match self.swarm.listen_on(addr) {
+                    Ok(_) => sender.send(Ok(())),
+                    Err(e) => sender.send(Err(anyhow::Error::from(e))),
+                };
+            }
+            Command::Dial {
+                peer_id,
+                addr,
+                sender,
+            } => {
+                if let std::collections::hash_map::Entry::Vacant(_) =
+                    self.pending_dial.entry(peer_id)
+                {
                     self.swarm
                         .behaviour_mut()
                         .kademlia
@@ -188,39 +185,38 @@ impl EventLoop {
     async fn handle_event(&mut self, event: SwarmEvent<ComposedEvent, std::io::Error>) {
         match event {
             SwarmEvent::NewListenAddr { address, .. } => {
-				let local_peer_id = *self.swarm.local_peer_id();
-				println!("Local node is listening on {:?}",
-					address.with(Protocol::P2p(local_peer_id.into()))
-				)
-			}
-            SwarmEvent::ConnectionClosed { .. } => {},
-			SwarmEvent::Dialing( .. ) => {},
-            SwarmEvent::IncomingConnection { local_addr, send_back_addr } => {
-				tracing::debug!("local address: {:?}", local_addr);
-				tracing::debug!("send back address: {:?}", send_back_addr);
-				let mut remote_addr = send_back_addr.clone();
-				let remote_port = remote_addr.pop().unwrap();
-				let new_remote_port = match remote_port {
-					Protocol::Tcp(p) => {
-						Protocol::Tcp(p - 1)
-					},
-					_ => {
-						tracing::error!("This is a fatal error this shouldn't have happened");
-						remote_port
-					}
-				};
-				remote_addr.push(new_remote_port);
-				self.swarm.dial(remote_addr).expect("Error dialing send back addr");
-			},
-            SwarmEvent::OutgoingConnectionError {
-				error,
-				..
-			} => {
-				tracing::error!("Had outgoing connection error {:?}", &error);
-			},
-			e => panic!("{:?}", e),
+                let local_peer_id = *self.swarm.local_peer_id();
+                println!(
+                    "Local node is listening on {:?}",
+                    address.with(Protocol::P2p(local_peer_id.into()))
+                )
+            }
+            SwarmEvent::ConnectionClosed { .. } => {}
+            SwarmEvent::Dialing(..) => {}
+            SwarmEvent::IncomingConnection {
+                local_addr,
+                send_back_addr,
+            } => {
+                tracing::debug!("local address: {:?}", local_addr);
+                tracing::debug!("send back address: {:?}", send_back_addr);
+                let mut remote_addr = send_back_addr.clone();
+                let remote_port = remote_addr.pop().unwrap();
+                let new_remote_port = match remote_port {
+                    Protocol::Tcp(p) => Protocol::Tcp(p - 1),
+                    _ => {
+                        tracing::error!("This is a fatal error this shouldn't have happened");
+                        remote_port
+                    }
+                };
+                remote_addr.push(new_remote_port);
+                self.swarm
+                    .dial(remote_addr)
+                    .expect("Error dialing send back addr");
+            }
+            SwarmEvent::OutgoingConnectionError { error, .. } => {
+                tracing::error!("Had outgoing connection error {:?}", &error);
+            }
+            e => panic!("{:?}", e),
         }
     }
-
-    
 }
