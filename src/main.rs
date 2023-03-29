@@ -2,8 +2,11 @@ mod network;
 mod webserver;
 mod wallet;
 
+use std::str::FromStr;
+
 use clap::{Args, Parser, Subcommand};
 use actix_web::{web, HttpRequest, Responder, HttpResponse};
+use libp2p::{Multiaddr, multiaddr::Protocol, PeerId};
 use tracing::Level;
 
 
@@ -45,7 +48,7 @@ fn main() -> anyhow::Result<()> {
 
             // Set up tracing
             let collector = tracing_subscriber::fmt()
-                .with_max_level(Level::INFO)
+                .with_max_level(Level::DEBUG)
                 .finish();
             tracing::subscriber::set_global_default(collector)
                 .expect("There was a problem setting up tracing");
@@ -71,12 +74,23 @@ fn main() -> anyhow::Result<()> {
             });
             
             // Fire up the network listener for incoming connections
-            let mut client = client.clone();
+            let mut listener_client = client.clone();
             rt.block_on(async move {
                 let addr = format!("/ip4/{}/tcp/{}", libp2p_ip4, libp2p_port).parse().expect("Failed to parse multiaddr");
-                client.start_listening(addr).await.unwrap();
+                listener_client.start_listening(addr).await.unwrap();
             });
 
+            let mut client_dial = client.clone();
+            if let Some(addr) = std::env::var_os("PEER") {
+                let addr = Multiaddr::from_str(&addr.to_string_lossy()).expect("Failed to parse multiaddr");
+                let peer_id = match addr.iter().last() {
+                    Some(Protocol::P2p(hash)) => PeerId::from_multihash(hash).expect("Failed to parse peer ID"),
+                    _ => panic!("No peer ID found in multiaddr")
+                };
+                rt.block_on(async move {
+                    client_dial.dial(peer_id, addr).await.unwrap();
+                })
+            }
             // TODO: Set up TLS connection
             
             // Fire up the web server for our API
@@ -87,7 +101,7 @@ fn main() -> anyhow::Result<()> {
 
 
             // TODO: Start up bitcoin wallet
-            wallet::fire_up_wallet();
+            // wallet::fire_up_wallet();
 
             println!("OpenBazaar started successfully! (Press Ctrl+C to exit)");
 

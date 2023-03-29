@@ -1,7 +1,8 @@
+use std::collections::HashMap;
 use std::error::Error;
 use futures::StreamExt;
 use libp2p::identity::Keypair;
-use libp2p::{Multiaddr};
+use libp2p::{Multiaddr, PeerId};
 use libp2p::kad::KademliaEvent;
 use libp2p::swarm::{SwarmBuilder, NetworkBehaviour};
 use tokio::sync::{mpsc, oneshot};
@@ -9,6 +10,7 @@ use libp2p::{swarm::SwarmEvent};
 use libp2p::multiaddr::Protocol;
 
 use libp2p::kad::{Kademlia, record::store::MemoryStore};
+use tracing::instrument;
 
 // TODO: connect to bootstrap nodes
 // const BOOTNODES: [&str; 1] = [
@@ -57,18 +59,45 @@ pub struct Client {
 }
 
 impl Client {
+
+    #[instrument]
     pub async fn start_listening(
         &mut self, addr: Multiaddr,
     ) -> anyhow::Result<()> {
         let (sender, receiver) = oneshot::channel();
-        self.sender.send(Command::StartListening {addr, sender}).await.expect("Failed to send command");
+        self.sender
+            .send(Command::StartListening {addr, sender})
+            .await
+            .expect("Failed to send command");
         receiver.await.expect("Failed to send command")
     }
+
+    #[instrument]
+    pub async fn dial(
+        &mut self,
+        peer_id: PeerId,
+        addr: Multiaddr,
+    ) -> anyhow::Result<()> {
+        let (sender, receiver) = oneshot::channel();
+        self.sender
+            .send(Command::Dial {peer_id, addr, sender})
+            .await
+            .expect("Failed to send command");
+        receiver.await.expect("Failed to send command")
+    }
+
+
+
 }
 
 #[derive(Debug)]
 enum Command {
     StartListening {
+        addr: Multiaddr,
+        sender: oneshot::Sender<Result<(), anyhow::Error>>,
+    },
+    Dial {
+        peer_id: PeerId,
         addr: Multiaddr,
         sender: oneshot::Sender<Result<(), anyhow::Error>>,
     },
@@ -103,6 +132,7 @@ impl From<KademliaEvent> for ComposedEvent {
 pub struct EventLoop {
     swarm: libp2p::Swarm<ComposedBehaviour>,
     command_receiver: mpsc::Receiver<Command>,
+    pending_dial: HashMap<PeerId, oneshot::Sender<Result<(), anyhow::Error>>>,
 }
 
 impl EventLoop {
@@ -110,6 +140,7 @@ impl EventLoop {
         Self {
             swarm,
             command_receiver,
+            pending_dial: Default::default(),
         }
     }
 
@@ -135,6 +166,22 @@ impl EventLoop {
 					Err(e) => sender.send(Err(anyhow::Error::from(e))),
 				};
 			}
+            Command::Dial { peer_id, addr, sender } => {
+                if let std::collections::hash_map::Entry::Vacant(_) = self.pending_dial.entry(peer_id) {
+                    self.swarm
+                        .behaviour_mut()
+                        .kademlia
+                        .add_address(&peer_id, addr.clone());
+                    match self.swarm.dial(addr) {
+                        Ok(_) => {
+                            self.pending_dial.insert(peer_id, sender);
+                        }
+                        Err(e) => {
+                            let _ = sender.send(Err(anyhow::Error::from(e)));
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -148,6 +195,29 @@ impl EventLoop {
 			}
             SwarmEvent::ConnectionClosed { .. } => {},
 			SwarmEvent::Dialing( .. ) => {},
+            SwarmEvent::IncomingConnection { local_addr, send_back_addr } => {
+				tracing::debug!("local address: {:?}", local_addr);
+				tracing::debug!("send back address: {:?}", send_back_addr);
+				let mut remote_addr = send_back_addr.clone();
+				let remote_port = remote_addr.pop().unwrap();
+				let new_remote_port = match remote_port {
+					Protocol::Tcp(p) => {
+						Protocol::Tcp(p - 1)
+					},
+					_ => {
+						tracing::error!("This is a fatal error this shouldn't have happened");
+						remote_port
+					}
+				};
+				remote_addr.push(new_remote_port);
+				self.swarm.dial(remote_addr).expect("Error dialing send back addr");
+			},
+            SwarmEvent::OutgoingConnectionError {
+				error,
+				..
+			} => {
+				tracing::error!("Had outgoing connection error {:?}", &error);
+			},
 			e => panic!("{:?}", e),
         }
     }
