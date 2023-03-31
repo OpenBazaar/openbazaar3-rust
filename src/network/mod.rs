@@ -1,6 +1,7 @@
 use futures::StreamExt;
 use libp2p::identity::Keypair;
-use libp2p::kad::KademliaEvent;
+use libp2p::kad::record::Key;
+use libp2p::kad::{KademliaEvent, QueryId};
 use libp2p::multiaddr::Protocol;
 use libp2p::swarm::SwarmEvent;
 use libp2p::swarm::{NetworkBehaviour, SwarmBuilder};
@@ -45,10 +46,6 @@ pub async fn new(keypair: Keypair) -> Result<(Client, EventLoop), Box<dyn Error>
     ))
 }
 
-pub fn generate_key() -> libp2p::identity::Keypair {
-    libp2p::identity::Keypair::generate_ed25519()
-}
-
 #[derive(Clone, Debug)]
 pub struct Client {
     sender: mpsc::Sender<Command>,
@@ -77,6 +74,16 @@ impl Client {
             .await
             .expect("Failed to send command");
         receiver.await.expect("Failed to send command")
+    }
+
+    #[instrument]
+    pub async fn start_providing(&self, share_addr: ShareAddress) {
+        let (sender, receiver) = oneshot::channel();
+        self.sender
+            .send(Command::StartProviding { share_addr, sender })
+            .await
+            .expect("Command receiver not to be dropped.");
+        receiver.await.expect("Sender not to be dropped.")
     }
 }
 
@@ -150,6 +157,8 @@ pub struct EventLoop {
     swarm: libp2p::Swarm<ComposedBehaviour>,
     command_receiver: mpsc::Receiver<Command>,
     pending_dial: HashMap<PeerId, oneshot::Sender<Result<(), anyhow::Error>>>,
+    pending_start_providing: HashMap<QueryId, oneshot::Sender<()>>,
+    pending_get_providers: HashMap<QueryId, oneshot::Sender<HashSet<PeerId>>>,
 }
 
 impl EventLoop {
@@ -161,6 +170,8 @@ impl EventLoop {
             swarm,
             command_receiver,
             pending_dial: Default::default(),
+            pending_start_providing: Default::default(),
+            pending_get_providers: Default::default(),
         }
     }
 
@@ -207,6 +218,25 @@ impl EventLoop {
                         }
                     }
                 }
+            }
+            Command::StartProviding { share_addr, sender } => {
+                let key: Key = share_addr.to_vec().into();
+                let query_id = self
+                    .swarm
+                    .behaviour_mut()
+                    .kademlia
+                    .start_providing(key)
+                    .expect("No store error.");
+                self.pending_start_providing.insert(query_id, sender);
+            }
+            Command::StopProviding { share_addr } => {
+                let key: Key = share_addr.to_vec().into();
+                self.swarm.behaviour_mut().kademlia.stop_providing(&key);
+            }
+            Command::GetProviders { share_addr, sender } => {
+                let key: Key = share_addr.to_vec().into();
+                let query_id = self.swarm.behaviour_mut().kademlia.get_providers(key);
+                self.pending_get_providers.insert(query_id, sender);
             }
             _ => todo!(),
         }
