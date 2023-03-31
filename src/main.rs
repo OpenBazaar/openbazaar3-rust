@@ -87,6 +87,7 @@ fn main() -> anyhow::Result<()> {
             // Create or retrieve datastore
             let ds = rt.block_on(async move { OpenBazaarDb::new(db_file).await.unwrap() });
 
+            // Retrieve or create a new BIP39-based identity from the datastore
             let keypair = rt.block_on(async move { ds.get_identity().await.unwrap() });
 
             /************

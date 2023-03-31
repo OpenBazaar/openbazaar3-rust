@@ -1,7 +1,11 @@
+use bincode::Serializer;
 use futures::StreamExt;
 use libp2p::identity::Keypair;
 use libp2p::kad::record::Key;
-use libp2p::kad::{KademliaEvent, QueryId};
+use libp2p::kad::{
+    AddProviderOk, GetClosestPeersOk, GetProvidersOk, GetRecordOk, KademliaEvent, QueryId,
+    QueryResult,
+};
 use libp2p::multiaddr::Protocol;
 use libp2p::swarm::SwarmEvent;
 use libp2p::swarm::{NetworkBehaviour, SwarmBuilder};
@@ -85,6 +89,35 @@ impl Client {
             .expect("Command receiver not to be dropped.");
         receiver.await.expect("Sender not to be dropped.")
     }
+
+    #[instrument]
+    pub async fn stop_providing(&self, share_addr: ShareAddress) {
+        self.sender
+            .send(Command::StopProviding { share_addr })
+            .await
+            .expect("Command receiver not to be dropped.");
+    }
+
+    #[instrument]
+    pub async fn get_providers(&self, share_addr: ShareAddress) -> HashSet<PeerId> {
+        let (sender, receiver) = oneshot::channel();
+        self.sender
+            .send(Command::GetProviders { share_addr, sender })
+            .await
+            .expect("Command receiver not to be dropped.");
+        receiver.await.expect("Sender not to be dropped.")
+    }
+
+    // getclosestpeers
+    #[instrument]
+    pub async fn get_closest_peers(&self, addr: ShareAddress) -> anyhow::Result<PeerId> {
+        let (sender, receiver) = oneshot::channel();
+        self.sender
+            .send(Command::GetClosestPeer { addr, sender })
+            .await
+            .expect("Command receiver not to be dropped.");
+        receiver.await.expect("Sender not to be dropped.")
+    }
 }
 
 #[derive(Debug)]
@@ -159,36 +192,11 @@ pub struct EventLoop {
     pending_dial: HashMap<PeerId, oneshot::Sender<Result<(), anyhow::Error>>>,
     pending_start_providing: HashMap<QueryId, oneshot::Sender<()>>,
     pending_get_providers: HashMap<QueryId, oneshot::Sender<HashSet<PeerId>>>,
+    pending_get_closest_peer: HashMap<QueryId, oneshot::Sender<anyhow::Result<PeerId>>>,
+    providing: HashSet<Key>,
 }
 
 impl EventLoop {
-    fn new(
-        swarm: libp2p::Swarm<ComposedBehaviour>,
-        command_receiver: mpsc::Receiver<Command>,
-    ) -> Self {
-        Self {
-            swarm,
-            command_receiver,
-            pending_dial: Default::default(),
-            pending_start_providing: Default::default(),
-            pending_get_providers: Default::default(),
-        }
-    }
-
-    pub async fn run(&mut self) {
-        loop {
-            tokio::select! {
-                event = self.swarm.next() => {
-                    self.handle_event(event.unwrap()).await
-                },
-                command = self.command_receiver.recv() => match command {
-                    Some(c) => self.handle_command(c).await,
-                    None => return,
-                }
-            }
-        }
-    }
-
     async fn handle_command(&mut self, command: Command) {
         match command {
             Command::StartListening { addr, sender } => {
@@ -238,12 +246,128 @@ impl EventLoop {
                 let query_id = self.swarm.behaviour_mut().kademlia.get_providers(key);
                 self.pending_get_providers.insert(query_id, sender);
             }
+            Command::GetClosestPeer { addr, sender } => {
+                let query_id = self.swarm.behaviour_mut().kademlia.get_closest_peers(addr);
+                self.pending_get_closest_peer.insert(query_id, sender);
+            }
+            Command::GetListenAddress { sender } => {
+                let peer_id = self.swarm.local_peer_id().to_owned().into();
+                let addr: Vec<Multiaddr> = self
+                    .swarm
+                    .listeners()
+                    .map(|addr| addr.to_owned().with(Protocol::P2p(peer_id)))
+                    .collect();
+                sender
+                    .send(Ok(addr))
+                    .expect("Failed to send listen address.")
+            }
             _ => todo!(),
         }
     }
 
+    /// The result of [`Kademlia::bootstrap`].
+    // Bootstrap(BootstrapResult),
+
+    // /// The result of a (automatic) republishing of a provider record.
+    // RepublishProvider(AddProviderResult),
+
+    // /// The result of [`Kademlia::get_record`].
+    // GetRecord(GetRecordResult),
+
+    // /// The result of [`Kademlia::put_record`].
+    // PutRecord(PutRecordResult),
+
+    // /// The result of a (automatic) republishing of a (value-)record.
+    // RepublishRecord(PutRecordResult),
+
     async fn handle_event(&mut self, event: SwarmEvent<ComposedEvent, std::io::Error>) {
         match event {
+            // SwarmEvent::Behaviour(ComposedEvent::Kademlia(
+            //     KademliaEvent::OutboundQueryProgressed {
+            //         id,
+            //         result: QueryResult::GetRecord(Ok(GetRecordOk::FoundRecord(peer_record))),
+            //         ..
+            //     },
+            // )) => {
+            //     let data = peer_record.record.value.clone();
+            //     let b: anyhow::Result<ServerAddrBundle, bincode::Error> =
+            //         bincode::deserialize(&data);
+            //     let bundle = match b {
+            //         Ok(r) => Ok(r),
+            //         Err(e) => Err(anyhow::Error::from(e)),
+            //     };
+
+            //     let _ = self
+            //         .pending_get_clear_addr
+            //         .remove(&id)
+            //         .expect("Completed query to previously pending")
+            //         .send(bundle);
+            // }
+            SwarmEvent::Behaviour(ComposedEvent::Kademlia(
+                KademliaEvent::OutboundQueryProgressed {
+                    id,
+                    result:
+                        QueryResult::GetProviders(Ok(GetProvidersOk::FoundProviders { providers, key })),
+                    ..
+                },
+            )) => {
+                let mut providers = providers.into_iter().collect::<HashSet<_>>();
+                if self.providing.contains(&key) {
+                    providers.insert(*self.swarm.local_peer_id());
+                }
+                let _ = self
+                    .pending_get_providers
+                    .remove(&id)
+                    .expect("No pending get providers request.")
+                    .send(providers);
+            }
+            SwarmEvent::Behaviour(ComposedEvent::Kademlia(
+                KademliaEvent::OutboundQueryProgressed {
+                    id,
+                    result: QueryResult::GetClosestPeers(Ok(GetClosestPeersOk { peers, key })),
+                    ..
+                },
+            )) => {
+                // Get k-bucket where this key is located
+                let key = libp2p::kad::kbucket::Key::from(key);
+
+                let local_peer_id = *self.swarm.local_peer_id();
+                let local_peer_key = libp2p::kad::kbucket::Key::from(local_peer_id);
+
+                // Find the distance between the key and the local peer
+                let host_distance = local_peer_key.distance(&key);
+                println!("Closest Peers => {:?}", peers);
+
+                let mut peer_id = peers.get(0).unwrap().to_owned();
+                let remote_peer_key = libp2p::kad::kbucket::Key::from(peer_id);
+
+                // Find the distance between the key and the remote peer
+                let remote_distance = remote_peer_key.distance(&key);
+
+                // Check if local peer is the closest
+                if remote_distance > host_distance {
+                    peer_id = local_peer_id;
+                }
+                println!("Returning peer => {:?}", peer_id);
+
+                let _ = self
+                    .pending_get_closest_peer
+                    .remove(&id)
+                    .expect("Completed query to previously pending")
+                    .send(Ok(peer_id));
+            }
+            SwarmEvent::Behaviour(ComposedEvent::Kademlia(
+                KademliaEvent::OutboundQueryProgressed {
+                    id: query_id,
+                    result: QueryResult::StartProviding(Ok(AddProviderOk { key })),
+                    ..
+                },
+            )) => {
+                self.providing.insert(key);
+                if let Some(sender) = self.pending_start_providing.remove(&query_id) {
+                    let _ = sender.send(());
+                }
+            }
             SwarmEvent::Behaviour(ComposedEvent::Kademlia(..)) => {}
             SwarmEvent::NewListenAddr { address, .. } => {
                 let local_peer_id = *self.swarm.local_peer_id();
@@ -296,6 +420,35 @@ impl EventLoop {
                 tracing::error!("Had outgoing connection error {:?}", &error);
             }
             e => panic!("{:?}", e),
+        }
+    }
+
+    fn new(
+        swarm: libp2p::Swarm<ComposedBehaviour>,
+        command_receiver: mpsc::Receiver<Command>,
+    ) -> Self {
+        Self {
+            swarm,
+            command_receiver,
+            pending_dial: Default::default(),
+            pending_start_providing: Default::default(),
+            pending_get_providers: Default::default(),
+            pending_get_closest_peer: Default::default(),
+            providing: Default::default(),
+        }
+    }
+
+    pub async fn run(&mut self) {
+        loop {
+            tokio::select! {
+                event = self.swarm.next() => {
+                    self.handle_event(event.unwrap()).await
+                },
+                command = self.command_receiver.recv() => match command {
+                    Some(c) => self.handle_command(c).await,
+                    None => return,
+                }
+            }
         }
     }
 }
