@@ -1,9 +1,12 @@
+mod crypto;
+mod db;
 mod network;
 mod wallet;
 mod webserver;
 
-use std::str::FromStr;
+use std::{path::PathBuf, str::FromStr};
 
+use crate::db::{OpenBazaarDb, DB};
 use actix_web::{web, HttpRequest, HttpResponse, Responder};
 use clap::{Args, Parser, Subcommand};
 use libp2p::{multiaddr::Protocol, Multiaddr, PeerId};
@@ -13,14 +16,32 @@ use tracing::Level;
 #[command(name = "openbazaar3")]
 #[command(about = "OpenBazaar 3 Marketplace", long_about = None)]
 struct Cli {
+    #[arg(short, long, value_name = "FILE")]
+    config: Option<PathBuf>,
+
     #[command(subcommand)]
     command: Commands,
 }
 
 #[derive(Subcommand)]
 enum Commands {
-    #[command()]
-    Start {},
+    #[command(about = "Start the OpenBazaar server")]
+    Start {
+        #[arg(long, value_name = "LIBP2P_PORT")]
+        libp2p_port: Option<u16>,
+
+        #[arg(long, value_name = "LIBP2P_HOSTNAME")]
+        libp2p_hostname: Option<String>,
+
+        #[arg(long, value_name = "API_SERVER_PORT")]
+        api_server_port: Option<u16>,
+
+        #[arg(long, value_name = "API_SERVER_HOSTNAME")]
+        api_server_hostname: Option<String>,
+
+        #[arg(short, long, value_name = "DATA_DIRECTORY")]
+        data_directory: Option<PathBuf>,
+    },
 }
 
 // TODO: Add configuration args for config file, ports, etc.
@@ -33,14 +54,13 @@ fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Start {} => {
-            let libp2p_port = 4002;
-            let libp2p_ip4 = "0.0.0.0";
-            let http_host = "0.0.0.0";
-            let http_port = 8080;
-            // TODO: implement TLS
-            // let https_port = 8081;
-
+        Commands::Start {
+            libp2p_port,
+            libp2p_hostname,
+            api_server_port,
+            api_server_hostname,
+            data_directory,
+        } => {
             println!("Starting OpenBazaar...");
 
             // Set up tracing
@@ -50,15 +70,28 @@ fn main() -> anyhow::Result<()> {
             tracing::subscriber::set_global_default(collector)
                 .expect("There was a problem setting up tracing");
 
+            // Set up default server hostnames/ports
+            let libp2p_hostname = libp2p_hostname.unwrap_or("0.0.0.0".to_string());
+            let libp2p_port = libp2p_port.unwrap_or(4001);
+
+            let http_host = api_server_hostname.unwrap_or("0.0.0.0".to_string());
+            let http_port = api_server_port.unwrap_or(8080);
+
+            let data_directory = data_directory.unwrap_or(PathBuf::from("data"));
+            let db_file = format!("{}/openbazaar.db", data_directory.to_str().unwrap());
+            println!("Using database file: {}", db_file);
+
             // Create tokio async runtime
             let rt = tokio::runtime::Runtime::new().unwrap();
+
+            // Create or retrieve datastore
+            let ds = rt.block_on(async move { OpenBazaarDb::new(db_file).await.unwrap() });
+
+            let keypair = rt.block_on(async move { ds.get_identity().await.unwrap() });
 
             /************
              * Set up libp2p network
              */
-
-            // TODO: recover existing key instead of creating a new one each time
-            let keypair = network::generate_key();
 
             // Create a new libp2p network and wait for it to spin up
             let (client, mut event_loop) =
@@ -70,7 +103,7 @@ fn main() -> anyhow::Result<()> {
             // Fire up the network listener for incoming connections
             let mut listener_client = client.clone();
             rt.block_on(async move {
-                let addr = format!("/ip4/{}/tcp/{}", libp2p_ip4, libp2p_port)
+                let addr = format!("/ip4/{}/tcp/{}", libp2p_hostname, libp2p_port)
                     .parse()
                     .expect("Failed to parse multiaddr");
                 listener_client.start_listening(addr).await.unwrap();
