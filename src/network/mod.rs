@@ -5,7 +5,7 @@ use libp2p::multiaddr::Protocol;
 use libp2p::swarm::SwarmEvent;
 use libp2p::swarm::{NetworkBehaviour, SwarmBuilder};
 use libp2p::{Multiaddr, PeerId};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use tokio::sync::{mpsc, oneshot};
 
@@ -16,6 +16,8 @@ use tracing::instrument;
 // const BOOTNODES: [&str; 1] = [
 //     "/ip4/[insert_ip]/tcp/4001/ipfs/[insert_peer_id]"
 // ];
+
+type ShareAddress = Vec<u8>;
 
 pub async fn new(keypair: Keypair) -> Result<(Client, EventLoop), Box<dyn Error>> {
     let peer_id = keypair.public().to_peer_id();
@@ -88,6 +90,33 @@ enum Command {
         peer_id: PeerId,
         addr: Multiaddr,
         sender: oneshot::Sender<Result<(), anyhow::Error>>,
+    },
+    StartProviding {
+        share_addr: ShareAddress,
+        sender: oneshot::Sender<()>,
+    },
+    StopProviding {
+        share_addr: ShareAddress,
+    },
+    GetProviders {
+        share_addr: ShareAddress,
+        sender: oneshot::Sender<HashSet<PeerId>>,
+    },
+    // GetClearAddr {
+    //     peer_id: PeerId,
+    //     sender: oneshot::Sender<anyhow::Result<ServerAddrBundle>>,
+    // },
+    // PutClearAddr {
+    //     addr_type: crate::message_storage::ServerAddressType,
+    //     addr: String,
+    //     sender: oneshot::Sender<()>,
+    // },
+    GetClosestPeer {
+        addr: ShareAddress,
+        sender: oneshot::Sender<anyhow::Result<PeerId>>,
+    },
+    GetListenAddress {
+        sender: oneshot::Sender<anyhow::Result<Vec<Multiaddr>>>,
     },
 }
 
@@ -179,6 +208,7 @@ impl EventLoop {
                     }
                 }
             }
+            _ => todo!(),
         }
     }
 
