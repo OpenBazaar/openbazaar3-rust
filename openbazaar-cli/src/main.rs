@@ -1,3 +1,4 @@
+use dialoguer::{theme::ColorfulTheme, Select};
 use openbazaar_lib::Client;
 use std::path::PathBuf;
 use structopt::StructOpt;
@@ -16,6 +17,24 @@ fn main() -> anyhow::Result<()> {
 
     println!("Connecting to server: {}", opt.server);
     client.connect(opt.server)?;
+
+    loop {
+        let options = vec!["Exit"];
+
+        let selection = Select::with_theme(&ColorfulTheme::default())
+            .with_prompt("Select an option")
+            .items(&options)
+            .default(0)
+            .interact()?;
+
+        match selection {
+            0 => {
+                println!("Exiting...");
+                break;
+            }
+            _ => unreachable!(),
+        }
+    }
 
     Ok(())
 }

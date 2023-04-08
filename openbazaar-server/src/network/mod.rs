@@ -1,19 +1,24 @@
 use futures::StreamExt;
+use libp2p::core::PeerId;
 use libp2p::identity::Keypair;
 use libp2p::kad::record::Key;
 use libp2p::kad::{
-    AddProviderOk, GetClosestPeersOk, GetProvidersOk, KademliaEvent, QueryId, QueryResult,
+    AddProviderOk, GetClosestPeersOk, GetProvidersOk, GetRecordError, GetRecordOk, KademliaEvent,
+    QueryId, QueryResult,
 };
 use libp2p::multiaddr::Protocol;
 use libp2p::swarm::SwarmEvent;
 use libp2p::swarm::{NetworkBehaviour, SwarmBuilder};
-use libp2p::{Multiaddr, PeerId};
+use libp2p::Multiaddr;
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use tokio::sync::{mpsc, oneshot};
 
 use libp2p::kad::{record::store::MemoryStore, Kademlia};
 use tracing::instrument;
+
+use crate::openbazaar::NodeAddressType;
 
 // TODO: connect to bootstrap nodes
 // const BOOTNODES: [&str; 1] = [
@@ -124,7 +129,9 @@ impl Client {
             .send(Command::GetClearAddress { peer_id, sender })
             .await
             .expect("Command receiver not to be dropped.");
-        receiver.await.expect("Sender not to be dropped.")
+        let result = receiver.await.expect("Sender not to be dropped.");
+        println!("get_clear_address: {:?}", result);
+        result
     }
 
     #[instrument]
@@ -212,11 +219,11 @@ impl From<KademliaEvent> for ComposedEvent {
 //     }
 // }
 
-#[derive(Debug)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct NodeData {
     pub peer_id: Vec<u8>,
     pub address: String,
-    pub address_type: crate::openbazaar::NodeAddressType,
+    pub address_type: NodeAddressType,
 }
 
 pub struct EventLoop {
@@ -324,27 +331,46 @@ impl EventLoop {
 
     async fn handle_event(&mut self, event: SwarmEvent<ComposedEvent, std::io::Error>) {
         match event {
-            // SwarmEvent::Behaviour(ComposedEvent::Kademlia(
-            //     KademliaEvent::OutboundQueryProgressed {
-            //         id,
-            //         result: QueryResult::GetRecord(Ok(GetRecordOk::FoundRecord(peer_record))),
-            //         ..
-            //     },
-            // )) => {
-            //     let data = peer_record.record.value.clone();
-            //     let b: anyhow::Result<ServerAddrBundle, bincode::Error> =
-            //         bincode::deserialize(&data);
-            //     let bundle = match b {
-            //         Ok(r) => Ok(r),
-            //         Err(e) => Err(anyhow::Error::from(e)),
-            //     };
+            SwarmEvent::Behaviour(ComposedEvent::Kademlia(
+                KademliaEvent::OutboundQueryProgressed {
+                    id,
+                    result: QueryResult::GetRecord(Ok(GetRecordOk::FoundRecord(peer_record))),
+                    ..
+                },
+            )) => {
+                let data = peer_record.record.value.clone();
+                let b: anyhow::Result<NodeData, bincode::Error> = bincode::deserialize(&data);
+                let bundle = match b {
+                    Ok(r) => Ok(r),
+                    Err(e) => Err(anyhow::Error::from(e)),
+                };
 
-            //     let _ = self
-            //         .pending_get_clear_addr
-            //         .remove(&id)
-            //         .expect("Completed query to previously pending")
-            //         .send(bundle);
-            // }
+                println!("Get clear address: {:?}", bundle);
+
+                let _ = self
+                    .pending_get_clear_address
+                    .remove(&id)
+                    .expect("Completed query to previously pending")
+                    .send(bundle);
+            }
+            SwarmEvent::Behaviour(ComposedEvent::Kademlia(
+                KademliaEvent::OutboundQueryProgressed {
+                    id,
+                    result:
+                        QueryResult::GetRecord(Err(GetRecordError::NotFound { key, closest_peers })),
+                    ..
+                },
+            )) => {
+                let _ = self
+                    .pending_get_clear_address
+                    .remove(&id)
+                    .expect("Completed query to previously pending")
+                    .send(Ok(NodeData {
+                        peer_id: "".into(),
+                        address: "".into(),
+                        address_type: NodeAddressType::Clear,
+                    }));
+            }
             SwarmEvent::Behaviour(ComposedEvent::Kademlia(
                 KademliaEvent::OutboundQueryProgressed {
                     id,
@@ -378,7 +404,6 @@ impl EventLoop {
 
                 // Find the distance between the key and the local peer
                 let host_distance = local_peer_key.distance(&key);
-                println!("Closest Peers => {:?}", peers);
 
                 if peers.is_empty() {
                     let _ = self
@@ -386,6 +411,7 @@ impl EventLoop {
                         .remove(&id)
                         .expect("Completed query to previously pending")
                         .send(Ok(local_peer_id));
+                    println!("Returning peer => {:?}", local_peer_id);
                     return;
                 }
 
@@ -494,6 +520,7 @@ impl EventLoop {
         loop {
             tokio::select! {
                 event = self.swarm.next() => {
+                    println!("Event => {:?}", event);
                     self.handle_event(event.unwrap()).await
                 },
                 command = self.command_receiver.recv() => match command {

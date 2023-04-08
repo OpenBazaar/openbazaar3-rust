@@ -76,6 +76,8 @@ pub struct OpenBazaarNodes {
 impl OpenBazaarNodes {
     pub fn new(db: Db) -> Self {
         let nodes = Default::default();
+        let nodes_bytes = bincode::serialize(&nodes).unwrap();
+        let _ = db.insert(b"nodes", nodes_bytes).unwrap();
 
         Self { db, nodes }
     }
