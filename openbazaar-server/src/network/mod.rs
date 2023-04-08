@@ -1,10 +1,8 @@
-use bincode::Serializer;
 use futures::StreamExt;
 use libp2p::identity::Keypair;
 use libp2p::kad::record::Key;
 use libp2p::kad::{
-    AddProviderOk, GetClosestPeersOk, GetProvidersOk, GetRecordOk, KademliaEvent, QueryId,
-    QueryResult,
+    AddProviderOk, GetClosestPeersOk, GetProvidersOk, KademliaEvent, QueryId, QueryResult,
 };
 use libp2p::multiaddr::Protocol;
 use libp2p::swarm::SwarmEvent;
@@ -228,6 +226,7 @@ pub struct EventLoop {
     pending_start_providing: HashMap<QueryId, oneshot::Sender<()>>,
     pending_get_providers: HashMap<QueryId, oneshot::Sender<HashSet<PeerId>>>,
     pending_get_closest_peer: HashMap<QueryId, oneshot::Sender<anyhow::Result<PeerId>>>,
+    pending_get_clear_address: HashMap<QueryId, oneshot::Sender<anyhow::Result<NodeData>>>,
     providing: HashSet<Key>,
 }
 
@@ -284,6 +283,14 @@ impl EventLoop {
             Command::GetClosestPeer { addr, sender } => {
                 let query_id = self.swarm.behaviour_mut().kademlia.get_closest_peers(addr);
                 self.pending_get_closest_peer.insert(query_id, sender);
+            }
+            Command::GetClearAddress { peer_id, sender } => {
+                let query_id = self
+                    .swarm
+                    .behaviour_mut()
+                    .kademlia
+                    .get_record(Key::from(peer_id.to_bytes()));
+                self.pending_get_clear_address.insert(query_id, sender);
             }
             Command::GetListenAddress { sender } => {
                 let peer_id = self.swarm.local_peer_id().to_owned().into();
@@ -372,6 +379,15 @@ impl EventLoop {
                 // Find the distance between the key and the local peer
                 let host_distance = local_peer_key.distance(&key);
                 println!("Closest Peers => {:?}", peers);
+
+                if peers.is_empty() {
+                    let _ = self
+                        .pending_get_closest_peer
+                        .remove(&id)
+                        .expect("Completed query to previously pending")
+                        .send(Ok(local_peer_id));
+                    return;
+                }
 
                 let mut peer_id = peers.get(0).unwrap().to_owned();
                 let remote_peer_key = libp2p::kad::kbucket::Key::from(peer_id);
@@ -469,6 +485,7 @@ impl EventLoop {
             pending_start_providing: Default::default(),
             pending_get_providers: Default::default(),
             pending_get_closest_peer: Default::default(),
+            pending_get_clear_address: Default::default(),
             providing: Default::default(),
         }
     }
