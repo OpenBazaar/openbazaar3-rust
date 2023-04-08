@@ -1,4 +1,4 @@
-use crate::OpenBazaarApi::NodeAddressType;
+use crate::open_bazaar_api::NodeAddressType;
 use anyhow;
 use bincode;
 use network::get_server_for_address;
@@ -10,7 +10,7 @@ use tokio::runtime::Runtime;
 
 mod network;
 
-pub(crate) mod OpenBazaarApi {
+pub(crate) mod open_bazaar_api {
     tonic::include_proto!("openbazaar_api");
 }
 
@@ -42,8 +42,12 @@ impl Client {
     pub fn connect(&mut self, server_address: String) -> anyhow::Result<()> {
         match get_server_for_address(&self.runtime, server_address.clone(), b"") {
             Ok(d) => {
-                let hostname = Node::new(NodeAddressType::Clear, server_address);
-                let _ = self.openbazaar_nodes.add(hostname);
+                let node = Node::new(NodeAddressType::Clear, server_address);
+                self.openbazaar_nodes.add(node).expect("Failed to add node");
+                let new_node = Node::new(d.0, d.1);
+                self.openbazaar_nodes
+                    .add(new_node)
+                    .expect("Failed to add node");
 
                 Ok(())
             }

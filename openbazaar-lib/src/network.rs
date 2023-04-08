@@ -1,6 +1,7 @@
-use crate::OpenBazaarApi::open_bazaar_api_client::OpenBazaarApiClient;
-use crate::{NodeAddressType, OpenBazaarApi::NodeLocationRequest};
+use crate::open_bazaar_api::open_bazaar_api_client::OpenBazaarApiClient;
+use crate::open_bazaar_api::{NodeAddressType, NodeLocationRequest};
 use tokio::runtime::Runtime;
+use tonic::transport::Channel;
 use tonic::{Request, Response, Status};
 
 #[derive(Debug, thiserror::Error)]
@@ -12,6 +13,20 @@ pub enum NetError {
     },
     #[error("Server threw error with responding status => {0:?}")]
     ServerResponseErr(Status),
+}
+
+impl From<i32> for NodeAddressType {
+    fn from(number: i32) -> Self {
+        match number {
+            1 => Self::Onion,
+            2 => Self::Clear,
+            3 => Self::Ipv4,
+            4 => Self::Ipv6,
+            _ => {
+                panic!("This shouldn't have happened")
+            }
+        }
+    }
 }
 
 pub fn get_server_for_address(
@@ -29,9 +44,18 @@ pub fn get_server_for_address(
         address: message_address.to_vec(),
     });
 
+    println!("Request: {:?}", request);
+
     // Get a response from the client lookup
+    let response = match rt.block_on(client.look_up(request)) {
+        Ok(d) => d,
+        Err(e) => return Err(NetError::ServerResponseErr(e)),
+    };
 
     // Return addr and addr_type
+    let response = response.into_inner();
+    let address_type = NodeAddressType::from(response.address_type);
+    let address = response.address;
 
-    Ok((NodeAddressType::Clear, String::from("test")))
+    Ok((address_type, address))
 }
