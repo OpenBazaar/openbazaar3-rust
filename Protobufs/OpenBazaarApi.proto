@@ -1,0 +1,27 @@
+syntax = "proto3";
+package openbazaar_api;
+
+enum NodeAddressType {
+  ONION = 0;
+  CLEAR = 1;
+  IPV4 = 2;
+  IPV6 = 3;
+}
+
+message NodeLocationRequest {
+    bytes address = 1;
+}
+
+message NodeLocationResponse {
+    NodeAddressType addressType = 1;
+    string address = 2;
+}
+
+message MessageLocationResponse {
+    repeated NodeLocationResponse addresses = 1;
+}
+
+service OpenBazaarApi {
+  rpc LookUp (NodeLocationRequest) returns (NodeLocationResponse);
+  rpc MessageLookUp (NodeLocationRequest) returns (MessageLocationResponse);
+}
