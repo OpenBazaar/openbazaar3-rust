@@ -5,11 +5,15 @@ mod network;
 mod wallet;
 mod webserver;
 
-use crate::db::{OpenBazaarDb, DB};
+use crate::{
+    api::OpenBazaarApiService,
+    db::{OpenBazaarDb, DB},
+    openbazaar::open_bazaar_api_server::{self, OpenBazaarApi},
+};
 use actix_web::{web, HttpRequest, HttpResponse, Responder};
 use clap::{Args, Parser, Subcommand};
 use libp2p::{multiaddr::Protocol, Multiaddr, PeerId};
-use std::{path::PathBuf, str::FromStr};
+use std::{net::SocketAddr, path::PathBuf, str::FromStr};
 use tonic::transport::Server;
 use tracing::Level;
 
@@ -48,7 +52,7 @@ enum Commands {
         user: Option<PathBuf>,
 
         #[arg(short, long, value_name = "GRPC_ADDRESS")]
-        grpc_address: Option<String>,
+        grpc_address: Option<SocketAddr>,
     },
 }
 
@@ -86,7 +90,7 @@ fn main() -> anyhow::Result<()> {
             let http_host = api_server_hostname.unwrap_or("0.0.0.0".to_string());
             let http_port = api_server_port.unwrap_or(8080);
 
-            let grpc_server = grpc_address.unwrap_or("[::1]:8010".to_string());
+            let grpc_server = grpc_address.unwrap_or(SocketAddr::from_str("0.0.0.0:8010").unwrap());
 
             let data_directory = user.unwrap_or(PathBuf::from("data"));
             let db_file = format!("data/{}/openbazaar.db", data_directory.to_str().unwrap());
@@ -162,17 +166,27 @@ fn main() -> anyhow::Result<()> {
             });
 
             // Construct OpenBazaar service
+            let ob_service = OpenBazaarApiService::new(client.clone());
 
-            // let server_handler = rt.spawn(async move {
-            //     Server::builder()
-            //         .add_service()
-            //         .serve(grpc_server.parse())
-            //         .await
-            //         .unwrap();
-            // });
+            let mut tonic_server = Server::builder();
+
+            let tonic_server_handler = rt.spawn(async move {
+                tonic_server
+                    .add_service(
+                        crate::openbazaar::open_bazaar_api_server::OpenBazaarApiServer::new(
+                            ob_service,
+                        ),
+                    )
+                    .serve(grpc_server)
+                    .await
+                    .unwrap();
+            });
+
+            println!("Storer listening on {}", grpc_server);
 
             rt.block_on(async move {
                 tokio::signal::ctrl_c().await.unwrap();
+                tonic_server_handler.abort();
                 signal_handler.abort();
             });
         }
