@@ -45,3 +45,6 @@ Thumbs.db
 
 tmp/
 data/
+
+### OpenBazaar-web
+openbazaar-web/protobufs/*_pb.js
