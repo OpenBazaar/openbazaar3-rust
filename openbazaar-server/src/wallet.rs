@@ -52,45 +52,44 @@ pub fn fire_up_wallet(mnemonic_words: String, data_dir: String) {
     let balance = wallet.get_balance();
     println!("Balance: {} sats", balance);
 
-    print!("Syncing...");
-    // Scanning the chain...
-    let esplora_url = "https://mempool.space/testnet/api";
-    let client = esplora_client::Builder::new(esplora_url)
-        .build_blocking()
-        .expect("something is screwed with esplora");
-    let checkpoints = wallet.checkpoints();
-    let spks: BTreeMap<_, _> = wallet
-        .spks_of_all_keychains()
-        .into_iter()
-        .map(|(k, spks)| {
-            let mut first = true;
-            (
-                k,
-                spks.inspect(move |(spk_i, _)| {
-                    if first {
-                        first = false;
-                        print!("\nScanning keychain [{:?}]:", k);
-                    }
-                    print!(" {}", spk_i);
-                    let _ = std::io::stdout().flush();
-                }),
-            )
-        })
-        .collect();
-    println!("");
-    let update = client
-        .scan(
-            checkpoints,
-            spks,
-            core::iter::empty(),
-            core::iter::empty(),
-            STOP_GAP,
-            PARALLEL_REQUESTS,
-        )
-        .expect("failed to scan");
+    // print!("Syncing...");
+    // // Scanning the chain...
+    // let esplora_url = "https://mempool.space/testnet/api";
+    // let client = esplora_client::Builder::new(esplora_url)
+    //     .build_blocking()
+    //     .expect("something is screwed with esplora");
+    // let checkpoints = wallet.checkpoints();
+    // let spks: BTreeMap<_, _> = wallet
+    //     .spks_of_all_keychains()
+    //     .into_iter()
+    //     .map(|(k, spks)| {
+    //         let mut first = true;
+    //         (
+    //             k,
+    //             spks.inspect(move |(spk_i, _)| {
+    //                 if first {
+    //                     first = false;
+    //                     print!("\nScanning keychain [{:?}]:", k);
+    //                 }
+    //                 print!(" {}", spk_i);
+    //                 let _ = std::io::stdout().flush();
+    //             }),
+    //         )
+    //     })
+    //     .collect();
+    // let update = client
+    //     .scan(
+    //         checkpoints,
+    //         spks,
+    //         core::iter::empty(),
+    //         core::iter::empty(),
+    //         STOP_GAP,
+    //         PARALLEL_REQUESTS,
+    //     )
+    //     .expect("failed to scan");
 
-    wallet.apply_update(update).expect("failed to apply update");
-    wallet.commit().expect("failed to commit update");
+    // wallet.apply_update(update).expect("failed to apply update");
+    // wallet.commit().expect("failed to commit update");
 
     // if balance.total() < SEND_AMOUNT {
     //     println!(
