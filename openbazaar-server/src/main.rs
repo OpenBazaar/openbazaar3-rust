@@ -2,23 +2,26 @@ mod api;
 mod crypto;
 mod db;
 mod network;
+mod profile;
 mod wallet;
 mod webserver;
 
+use crate::openbazaar::open_bazaar_rpc_server::OpenBazaarRpcServer;
 use crate::{
-    api::OpenBazaarApiService,
+    api::OpenBazaarRpcService,
     db::{OpenBazaarDb, DB},
-    openbazaar::open_bazaar_api_server::{self, OpenBazaarApi},
 };
-use actix_web::{web, HttpRequest, HttpResponse, Responder};
-use clap::{Args, Parser, Subcommand};
+use actix_web::{http::Method, web, HttpRequest, HttpResponse, Responder};
+use clap::{Parser, Subcommand};
 use libp2p::{multiaddr::Protocol, Multiaddr, PeerId};
 use std::{net::SocketAddr, path::PathBuf, str::FromStr};
 use tonic::transport::Server;
+use tonic_web::GrpcWebLayer;
+use tower_http::cors::{Any, CorsLayer};
 use tracing::Level;
 
 pub mod openbazaar {
-    include!(concat!(env!("OUT_DIR"), "/openbazaar_api.rs"));
+    include!(concat!(env!("OUT_DIR"), "/openbazaar_rpc.rs"));
 }
 
 #[derive(Parser)]
@@ -51,16 +54,10 @@ enum Commands {
         #[arg(short, long, value_name = "USER")]
         user: Option<PathBuf>,
 
-        #[arg(short, long, value_name = "GRPC_ADDRESS")]
-        grpc_address: Option<SocketAddr>,
+        #[arg(short, long, value_name = "GRPC_SERVER")]
+        grpc_server: Option<SocketAddr>,
     },
 }
-
-// TODO: Add configuration args for config file, ports, etc.
-// #[derive(Args)]
-// struct StartArgs {
-
-// }
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
@@ -72,7 +69,7 @@ fn main() -> anyhow::Result<()> {
             api_server_port,
             api_server_hostname,
             user,
-            grpc_address,
+            grpc_server,
         } => {
             println!("Starting OpenBazaar...");
 
@@ -90,11 +87,10 @@ fn main() -> anyhow::Result<()> {
             let http_host = api_server_hostname.unwrap_or("0.0.0.0".to_string());
             let http_port = api_server_port.unwrap_or(8080);
 
-            let grpc_server = grpc_address.unwrap_or(SocketAddr::from_str("0.0.0.0:8010").unwrap());
+            let grpc_server = grpc_server.unwrap_or(SocketAddr::from_str("0.0.0.0:8010").unwrap());
 
             let data_directory = user.unwrap_or(PathBuf::from("data"));
             let db_file = format!("data/{}/openbazaar.db", data_directory.to_str().unwrap());
-            println!("Using database file: {}", db_file);
 
             // Create tokio async runtime
             let rt = tokio::runtime::Runtime::new().unwrap();
@@ -126,6 +122,7 @@ fn main() -> anyhow::Result<()> {
                 listener_client.start_listening(addr).await.unwrap();
             });
 
+            // Connect to bootstrap node
             let mut client_dial = client.clone();
             if let Some(addr) = std::env::var_os("PEER") {
                 let addr = Multiaddr::from_str(&addr.to_string_lossy())
@@ -140,6 +137,23 @@ fn main() -> anyhow::Result<()> {
                     client_dial.dial(peer_id, addr).await.unwrap();
                 })
             }
+
+            let mut peer_dial = client.clone();
+            if let Some(addr) = std::env::var_os("PEER") {
+                let addr = Multiaddr::from_str(addr.to_str().unwrap())
+                    .expect("Couldn't parse multiaddress");
+                let peer_id = match addr.iter().last() {
+                    Some(Protocol::P2p(hash)) => PeerId::from_multihash(hash).expect("Valid hash."),
+                    _ => panic!("Expect peer multiaddr to contain peer ID."),
+                };
+                rt.block_on(async move {
+                    peer_dial
+                        .dial(peer_id, addr)
+                        .await
+                        .expect("Dial to succeed");
+                });
+            }
+
             // TODO: Set up TLS connection
 
             // Fire up the web server for our API
@@ -158,7 +172,7 @@ fn main() -> anyhow::Result<()> {
                 );
             });
 
-            println!("OpenBazaar started successfully! (Press Ctrl+C to exit)");
+            println!("\nOpenBazaar started successfully! (Press Ctrl+C to exit)");
 
             let signal_handler = rt.spawn(async move {
                 tokio::signal::ctrl_c().await.unwrap();
@@ -166,23 +180,33 @@ fn main() -> anyhow::Result<()> {
             });
 
             // Construct OpenBazaar service
-            let ob_service = OpenBazaarApiService::new(client.clone());
+            let ob_service = OpenBazaarRpcService::new(client.clone(), ds);
 
-            let mut tonic_server = Server::builder();
+            let tonic_server = Server::builder();
+
+            let cors = CorsLayer::new()
+                // allow any headers
+                .allow_headers(Any)
+                // allow `GET` when accessing the resource
+                .allow_methods([Method::GET, Method::POST])
+                // allow requests from below origins
+                .allow_origin([
+                    "http://localhost:3000".parse()?,
+                    "https://localhost:3001".parse()?,
+                ]);
 
             let tonic_server_handler = rt.spawn(async move {
                 tonic_server
-                    .add_service(
-                        crate::openbazaar::open_bazaar_api_server::OpenBazaarApiServer::new(
-                            ob_service,
-                        ),
-                    )
+                    .accept_http1(true)
+                    .layer(cors)
+                    .layer(GrpcWebLayer::new())
+                    .add_service(OpenBazaarRpcServer::new(ob_service))
                     .serve(grpc_server)
                     .await
                     .unwrap();
             });
 
-            println!("Storer listening on {}", grpc_server);
+            println!("gRPC server listening on {}", grpc_server);
 
             rt.block_on(async move {
                 tokio::signal::ctrl_c().await.unwrap();
