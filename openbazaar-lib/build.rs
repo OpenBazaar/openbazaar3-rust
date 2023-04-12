@@ -4,6 +4,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "NodeAddressType",
             "#[derive(serde::Serialize, serde::Deserialize)]",
         )
-        .compile(&["../Protobufs/OpenBazaarApi.proto"], &["../Protobufs/"])?;
+        .compile(&["../Protobufs/OpenBazaarRpc.proto"], &["../Protobufs/"])?;
     Ok(())
 }
