@@ -116,7 +116,7 @@ impl Client {
     pub async fn get_closest_peers(&self, addr: ShareAddress) -> anyhow::Result<PeerId> {
         let (sender, receiver) = oneshot::channel();
         self.sender
-            .send(Command::GetClosestPeer { addr, sender })
+            .send(Command::GetClosestPeers { addr, sender })
             .await
             .expect("Command receiver not to be dropped.");
         receiver.await.expect("Sender not to be dropped.")
@@ -130,7 +130,6 @@ impl Client {
             .await
             .expect("Command receiver not to be dropped.");
         let result = receiver.await.expect("Sender not to be dropped.");
-        println!("get_clear_address: {:?}", result);
         result
     }
 
@@ -184,7 +183,7 @@ enum Command {
         address: String,
         sender: oneshot::Sender<()>,
     },
-    GetClosestPeer {
+    GetClosestPeers {
         addr: ShareAddress,
         sender: oneshot::Sender<anyhow::Result<PeerId>>,
     },
@@ -270,6 +269,7 @@ impl EventLoop {
             }
             Command::StartProviding { share_addr, sender } => {
                 let key: Key = share_addr.to_vec().into();
+                println!("Start providing: {:?}", key);
                 let query_id = self
                     .swarm
                     .behaviour_mut()
@@ -287,7 +287,7 @@ impl EventLoop {
                 let query_id = self.swarm.behaviour_mut().kademlia.get_providers(key);
                 self.pending_get_providers.insert(query_id, sender);
             }
-            Command::GetClosestPeer { addr, sender } => {
+            Command::GetClosestPeers { addr, sender } => {
                 let query_id = self.swarm.behaviour_mut().kademlia.get_closest_peers(addr);
                 self.pending_get_closest_peer.insert(query_id, sender);
             }
@@ -345,8 +345,6 @@ impl EventLoop {
                     Err(e) => Err(anyhow::Error::from(e)),
                 };
 
-                println!("Get clear address: {:?}", bundle);
-
                 let _ = self
                     .pending_get_clear_address
                     .remove(&id)
@@ -370,6 +368,24 @@ impl EventLoop {
                         address: "".into(),
                         address_type: NodeAddressType::Clear,
                     }));
+            }
+            SwarmEvent::Behaviour(ComposedEvent::Kademlia(
+                KademliaEvent::OutboundQueryProgressed {
+                    id,
+                    result:
+                        QueryResult::GetProviders(Ok(GetProvidersOk::FinishedWithNoAdditionalRecord {
+                            closest_peers,
+                            ..
+                        })),
+                    ..
+                },
+            )) => {
+                let closest_peers_set = closest_peers.into_iter().collect::<HashSet<_>>();
+                let _ = self
+                    .pending_get_providers
+                    .remove(&id)
+                    .expect("Completed query to previously pending")
+                    .send(closest_peers_set);
             }
             SwarmEvent::Behaviour(ComposedEvent::Kademlia(
                 KademliaEvent::OutboundQueryProgressed {
@@ -405,17 +421,13 @@ impl EventLoop {
                 // Find the distance between the key and the local peer
                 let host_distance = local_peer_key.distance(&key);
 
+                let mut peer_id: libp2p::identity::PeerId;
                 if peers.is_empty() {
-                    let _ = self
-                        .pending_get_closest_peer
-                        .remove(&id)
-                        .expect("Completed query to previously pending")
-                        .send(Ok(local_peer_id));
-                    println!("Returning peer => {:?}", local_peer_id);
-                    return;
+                    peer_id = local_peer_id;
+                } else {
+                    peer_id = peers.get(0).unwrap().to_owned();
                 }
 
-                let mut peer_id = peers.get(0).unwrap().to_owned();
                 let remote_peer_key = libp2p::kad::kbucket::Key::from(peer_id);
 
                 // Find the distance between the key and the remote peer
@@ -425,7 +437,6 @@ impl EventLoop {
                 if remote_distance > host_distance {
                     peer_id = local_peer_id;
                 }
-                println!("Returning peer => {:?}", peer_id);
 
                 let _ = self
                     .pending_get_closest_peer
