@@ -1,0 +1,65 @@
+syntax = "proto3";
+package openbazaar_rpc;
+
+service OpenBazaarRpc {
+  rpc SaveMessage (SaveMessageRequest) returns (SaveMessageResponse);
+  rpc GetMessage (GetMessageRequest) returns (GetMessageResponse);
+  rpc LookUp (NodeLocationRequest) returns (NodeLocationResponse);
+  rpc MessageLookUp (NodeLocationRequest) returns (MessageLocationResponse);  
+  rpc GetProfile (GetProfileRequest) returns (GetProfileResponse);
+}
+
+enum NodeAddressType {
+  ONION = 0;
+  CLEAR = 1;
+  IPV4 = 2;
+  IPV6 = 3;
+}
+
+enum HashType {
+  SHA512 = 0;
+  ADLER32 = 1;
+  LZ4 = 2;
+}
+
+message NodeLocationRequest {
+    bytes address = 1;
+}
+
+message NodeLocationResponse {
+    NodeAddressType addressType = 1;
+    string address = 2;
+}
+
+message MessageLocationResponse {
+    repeated NodeLocationResponse addresses = 1;
+}
+
+message SaveMessageRequest {
+  bytes address = 1;
+  bytes content = 2;
+}
+
+message SaveMessageResponse {
+  bytes hash = 1;
+}
+
+message GetMessageRequest {
+  bytes address = 1;
+}
+
+message GetMessageResponse {
+  bytes address = 1;
+  bytes content = 2;
+}
+
+message GetProfileRequest {
+  string id = 1;
+}
+
+message GetProfileResponse {
+  string id = 1;
+  string name = 2;
+  string email = 3;
+}
+
