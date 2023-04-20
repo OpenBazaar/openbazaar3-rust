@@ -7,6 +7,8 @@ service OpenBazaarRpc {
   rpc LookUp (NodeLocationRequest) returns (NodeLocationResponse);
   rpc MessageLookUp (NodeLocationRequest) returns (MessageLocationResponse);  
   rpc GetProfile (GetProfileRequest) returns (GetProfileResponse);
+  rpc SetProfile (SetProfileRequest) returns (SetProfileResponse);
+  rpc GetPeerId (GetPeerIdRequest) returns (GetPeerIdResponse);
 }
 
 enum NodeAddressType {
@@ -58,8 +60,25 @@ message GetProfileRequest {
 }
 
 message GetProfileResponse {
-  string id = 1;
-  string name = 2;
-  string email = 3;
+  Profile profile = 1;
 }
 
+message SetProfileRequest{
+  Profile profile = 1;
+}
+
+message Profile {
+  string id = 1;
+  string name = 2;
+  string email = 3; 
+}
+
+message SetProfileResponse {
+  Profile profile = 1;
+}
+
+message GetPeerIdRequest {}
+
+message GetPeerIdResponse {
+  string id = 1;
+}

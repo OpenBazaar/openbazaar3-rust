@@ -1,7 +1,7 @@
 use futures::StreamExt;
-use libp2p::core::PeerId;
 use libp2p::identity::Keypair;
 use libp2p::kad::record::Key;
+use libp2p::kad::{record::store::MemoryStore, Kademlia};
 use libp2p::kad::{
     AddProviderOk, GetClosestPeersOk, GetProvidersOk, GetRecordError, GetRecordOk, KademliaEvent,
     QueryId, QueryResult,
@@ -10,12 +10,11 @@ use libp2p::multiaddr::Protocol;
 use libp2p::swarm::SwarmEvent;
 use libp2p::swarm::{NetworkBehaviour, SwarmBuilder};
 use libp2p::Multiaddr;
+use libp2p_identity::PeerId;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use tokio::sync::{mpsc, oneshot};
-
-use libp2p::kad::{record::store::MemoryStore, Kademlia};
 use tracing::instrument;
 
 use crate::openbazaar::NodeAddressType;
@@ -150,6 +149,16 @@ impl Client {
             .expect("Command receiver not to be dropped.");
         receiver.await.expect("Sender not to be dropped.")
     }
+
+    #[instrument]
+    pub async fn get_peer_id(&self) -> PeerId {
+        let (sender, receiver) = oneshot::channel();
+        self.sender
+            .send(Command::GetPeerId { sender })
+            .await
+            .expect("Command receiver not to be dropped.");
+        receiver.await.expect("Sender not to be dropped.")
+    }
 }
 
 #[derive(Debug)]
@@ -189,6 +198,9 @@ enum Command {
     },
     GetListenAddress {
         sender: oneshot::Sender<anyhow::Result<Vec<Multiaddr>>>,
+    },
+    GetPeerId {
+        sender: oneshot::Sender<PeerId>,
     },
 }
 
@@ -309,6 +321,10 @@ impl EventLoop {
                 sender
                     .send(Ok(addr))
                     .expect("Failed to send listen address.")
+            }
+            Command::GetPeerId { sender } => {
+                let peer_id = self.swarm.local_peer_id().to_owned();
+                sender.send(peer_id).expect("Failed to send peer id.")
             }
             _ => todo!(),
         }
@@ -507,7 +523,9 @@ impl EventLoop {
             SwarmEvent::OutgoingConnectionError { error, .. } => {
                 tracing::error!("Had outgoing connection error {:?}", &error);
             }
-            e => panic!("{:?}", e),
+            e => {
+                tracing::error!("Unknown event: {:?}", e)
+            }
         }
     }
 

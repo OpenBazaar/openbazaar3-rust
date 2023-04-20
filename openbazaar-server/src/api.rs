@@ -3,12 +3,18 @@ use std::collections::{HashMap, VecDeque};
 use crate::db::DB;
 use crate::network::Client;
 use crate::openbazaar::open_bazaar_rpc_server::OpenBazaarRpc;
+use crate::openbazaar::GetPeerIdRequest;
+use crate::openbazaar::GetPeerIdResponse;
 use crate::openbazaar::HashType;
 use crate::openbazaar::SaveMessageRequest;
+use crate::openbazaar::SetProfileResponse;
 use crate::openbazaar::{
     GetMessageRequest, GetMessageResponse, GetProfileRequest, GetProfileResponse,
-    MessageLocationResponse, NodeLocationRequest, NodeLocationResponse, SaveMessageResponse,
+    MessageLocationResponse, NodeLocationRequest, NodeLocationResponse, Profile as ProfileMessage,
+    SaveMessageResponse, SetProfileRequest,
 };
+use crate::profile::Profile;
+use crate::profile::ProfileData;
 use sha3::{Digest, Sha3_256};
 use tonic::{Request, Response, Status};
 use tracing::log::trace;
@@ -151,6 +157,8 @@ impl<T: DB + Sync + Send + 'static> OpenBazaarRpc for OpenBazaarRpcService<T> {
             .expect("Didn't get message")
             .expect("Empty");
 
+        event!(Level::DEBUG, "Saved to DB");
+
         let response = GetMessageResponse {
             address: request_data.address.clone(),
             content: content.clone(),
@@ -164,7 +172,7 @@ impl<T: DB + Sync + Send + 'static> OpenBazaarRpc for OpenBazaarRpcService<T> {
         &self,
         _: Request<GetProfileRequest>,
     ) -> Result<Response<GetProfileResponse>, Status> {
-        event!(Level::INFO, "Processing Profile Request");
+        event!(Level::INFO, "Processing GetProfile Request");
 
         let content = self
             .dbconn
@@ -173,15 +181,68 @@ impl<T: DB + Sync + Send + 'static> OpenBazaarRpc for OpenBazaarRpcService<T> {
             .expect("Didn't get message")
             .expect("Empty");
 
+        let pd = content.clone().profile;
+
+        let responseProfile = ProfileMessage {
+            id: pd.id,
+            name: pd.name,
+            email: pd.email,
+        };
+
         let response = GetProfileResponse {
-            id: content.id,
-            name: content.name,
-            email: content.email,
+            profile: Some(responseProfile),
+        };
+
+        Ok(Response::new(response))
+    }
+
+    #[instrument(skip(self))]
+    async fn set_profile(
+        &self,
+        request: Request<SetProfileRequest>,
+    ) -> Result<Response<SetProfileResponse>, Status> {
+        event!(Level::INFO, "Processing SetProfile Request");
+
+        // Turn request profile into ob profile
+        let pd = request.into_inner().profile.unwrap();
+
+        // Construct a profile object
+        let pd_clone = pd.clone();
+        let profile = Profile {
+            profile: ProfileData {
+                id: pd_clone.id,
+                name: pd_clone.name,
+                email: pd_clone.email,
+            },
+        };
+
+        let _ = self
+            .dbconn
+            .set_profile(&profile)
+            .await
+            .expect("Didn't get message");
+
+        let response = SetProfileResponse { profile: Some(pd) };
+
+        Ok(Response::new(response))
+    }
+
+    async fn get_peer_id(
+        &self,
+        _: Request<GetPeerIdRequest>,
+    ) -> Result<Response<GetPeerIdResponse>, Status> {
+        event!(Level::INFO, "Processing Get Peer Id Request");
+
+        let client_clone = self.client.clone();
+
+        let response = GetPeerIdResponse {
+            id: client_clone.get_peer_id().await.to_string(),
         };
 
         Ok(Response::new(response))
     }
 }
+
 impl SaveMessageRequest {
     pub fn hash_content(&self) -> Vec<u8> {
         let content = &self.content;
