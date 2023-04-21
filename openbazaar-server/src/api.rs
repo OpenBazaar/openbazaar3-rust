@@ -5,7 +5,6 @@ use crate::network::Client;
 use crate::openbazaar::open_bazaar_rpc_server::OpenBazaarRpc;
 use crate::openbazaar::GetPeerIdRequest;
 use crate::openbazaar::GetPeerIdResponse;
-use crate::openbazaar::HashType;
 use crate::openbazaar::SaveMessageRequest;
 use crate::openbazaar::SetProfileResponse;
 use crate::openbazaar::{
@@ -17,7 +16,6 @@ use crate::profile::Profile;
 use crate::profile::ProfileData;
 use sha3::{Digest, Sha3_256};
 use tonic::{Request, Response, Status};
-use tracing::log::trace;
 use tracing::{event, instrument, Level};
 
 #[derive(Debug)]
@@ -183,14 +181,14 @@ impl<T: DB + Sync + Send + 'static> OpenBazaarRpc for OpenBazaarRpcService<T> {
 
         let pd = content.clone().profile;
 
-        let responseProfile = ProfileMessage {
+        let response_profile = ProfileMessage {
             id: pd.id,
             name: pd.name,
             email: pd.email,
         };
 
         let response = GetProfileResponse {
-            profile: Some(responseProfile),
+            profile: Some(response_profile),
         };
 
         Ok(Response::new(response))

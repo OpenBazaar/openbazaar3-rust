@@ -1,8 +1,7 @@
 use crate::open_bazaar_api::open_bazaar_api_client::OpenBazaarApiClient;
 use crate::open_bazaar_api::{NodeAddressType, NodeLocationRequest};
 use tokio::runtime::Runtime;
-use tonic::transport::Channel;
-use tonic::{Request, Response, Status};
+use tonic::{Request, Status};
 
 #[derive(Debug, thiserror::Error)]
 pub enum NetError {

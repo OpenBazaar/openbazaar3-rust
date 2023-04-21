@@ -370,8 +370,7 @@ impl EventLoop {
             SwarmEvent::Behaviour(ComposedEvent::Kademlia(
                 KademliaEvent::OutboundQueryProgressed {
                     id,
-                    result:
-                        QueryResult::GetRecord(Err(GetRecordError::NotFound { key, closest_peers })),
+                    result: QueryResult::GetRecord(Err(GetRecordError::NotFound { .. })),
                     ..
                 },
             )) => {

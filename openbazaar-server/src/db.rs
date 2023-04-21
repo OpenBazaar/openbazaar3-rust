@@ -79,8 +79,7 @@ impl DB for OpenBazaarDb {
     }
 
     async fn set_profile(&self, profile: &Profile) -> anyhow::Result<()> {
-        let profile = self
-            .db
+        self.db
             .insert(b"profile", bincode::serialize(profile).unwrap())?;
         Ok(())
     }

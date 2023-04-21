@@ -1,21 +1,8 @@
 use async_trait::async_trait;
-use axum::extract::FromRequest;
 use axum::http::request::Parts;
-use axum::http::Request as HttpRequest;
-use axum::http::Request;
-use axum::{
-    extract::{Extension, FromRequestParts, Path},
-    http::{Response, StatusCode},
-    response::Html,
-    routing::get,
-    Router,
-};
-use axum_macros::debug_handler;
-use serde::{Deserialize, Serialize};
+use axum::{extract::FromRequestParts, http::StatusCode, routing::get, Router};
 use std::convert::Infallible;
 use std::io::Error;
-use std::sync::Arc;
-use thiserror::Error;
 use tower_http::cors::{Any, CorsLayer};
 
 struct AppUser {
@@ -38,7 +25,8 @@ where
 }
 
 pub async fn start_webserver(addr: String) -> Result<(), Error> {
-    let cors = CorsLayer::new().allow_origin(Any);
+    // fixme: cors is unused for now.
+    let _cors = CorsLayer::new().allow_origin(Any);
 
     let app = Router::new()
         .route("/", get(root))
