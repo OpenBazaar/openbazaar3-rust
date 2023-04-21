@@ -4,14 +4,14 @@ use bdk::keys::{DerivableKey, ExtendedKey};
 use bdk::template::Bip84;
 use bdk::wallet::AddressIndex;
 use bdk::Wallet;
-use bdk_esplora::{esplora_client, EsploraExt};
+// use bdk_esplora::{esplora_client, EsploraExt};
 use bdk_file_store::KeychainStore;
-use std::collections::BTreeMap;
-use std::io::Write;
+// use std::collections::BTreeMap;
+// use std::io::Write;
 
-const SEND_AMOUNT: u64 = 5000;
-const STOP_GAP: usize = 50;
-const PARALLEL_REQUESTS: usize = 5;
+// const SEND_AMOUNT: u64 = 5000;
+// const STOP_GAP: usize = 50;
+// const PARALLEL_REQUESTS: usize = 5;
 
 pub fn fire_up_wallet(mnemonic_words: String, data_dir: String) {
     let network = Network::Testnet;

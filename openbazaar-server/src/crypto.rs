@@ -1,6 +1,7 @@
 use bdk::keys::bip39::{Language, Mnemonic};
 
-use libp2p::core::identity::ed25519;
+use libp2p::identity::ed25519;
+// use libp2p::core::identity::ed25519;
 use std::str::FromStr;
 
 pub fn generate_mnemonic() -> String {
@@ -20,8 +21,7 @@ pub fn generate_keypair_from_mnemonic(
     seed.copy_from_slice(&seed_64_bytes[0..32]);
 
     let sk = ed25519::SecretKey::from_bytes(seed).expect("not the right amount of bytes");
-    let keypair: libp2p::identity::Keypair =
-        libp2p::identity::Keypair::Ed25519(ed25519::Keypair::from(sk));
+    let keypair = ed25519::Keypair::try_from(sk)?;
 
-    Ok(keypair)
+    Ok(keypair.into())
 }
